@@ -230,7 +230,11 @@ class VrpcLocal {
             .sort()
             .filter(value => value[0] === '_')
             .map(key => data[key])
-          value.apply(null, args) // This is the actual function call
+          try {
+            value.apply(null, args) // This is the actual function call
+          } catch (err) {
+            console.error('VrpcLocal:236: Failed to execute callback:', err)
+          }
         })
       } else if (this._isEmitter(value)) {
         const { emitter, event } = value
