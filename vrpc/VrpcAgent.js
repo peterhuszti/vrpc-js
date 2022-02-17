@@ -162,7 +162,7 @@ class VrpcAgent extends EventEmitter {
    * @return {Promise} Resolves once connected or explicitly ended, never
    * rejects
    */
-  async serve () {
+  async serve (mqttClientId = null) {
     const md5 = crypto
       .createHash('md5')
       .update(this._domain + this._agent)
@@ -179,7 +179,7 @@ class VrpcAgent extends EventEmitter {
       password,
       keepalive: 30,
       connectTimeout: 10 * 1000,
-      clientId: `vrpca${md5}`,
+      clientId: mqttClientId || `vrpca${md5}`,
       rejectUnauthorized: false,
       will: {
         topic: `${this._baseTopic}/__agentInfo__`,
