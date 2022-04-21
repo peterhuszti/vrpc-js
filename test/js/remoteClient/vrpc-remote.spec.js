@@ -708,4 +708,74 @@ describe('vrpc-remote', () => {
       })
     })
   })
+
+  context.only('An VrpcRemote instance dealing with failed subscribe calls', () => {
+    const mockSubscribeFunction = (topic, options, callback) => {
+      const topicArray = Array.isArray(topic) ? topic : [topic]
+      const resultArray = topicArray.map(x => {
+        return {
+          topic: x,
+          qos: (options.outputQos === undefined) ? options.qos : options.outputQos
+        }
+      })
+      callback(null, resultArray)
+    }
+
+    const vrpcRemote = new VrpcRemote({
+      domain: 'test.vrpc',
+      agent: 'js',
+      token: 'notreallyneeded'
+    })
+
+    // Install a mock mqtt client object
+    vrpcRemote._client = {
+      subscribe: mockSubscribeFunction
+    }
+    it('should correctly report error on subscribe with qos=128', () => {
+      const errorSpy = sinon.spy()
+      vrpcRemote.on('error', errorSpy)
+
+      vrpcRemote._mqttSubscribe('foo')
+      assert(errorSpy.notCalled) // all fine
+
+      vrpcRemote._mqttSubscribe(['foo', 'bar'])
+      assert(errorSpy.notCalled) // all fine
+
+      // now mock a failed subscription
+      vrpcRemote._mqttSubscribe('foo', { outputQos: 128 })
+      assert.strictEqual(errorSpy.args[0][0].code, 'SUBSCRIBE_FAILED')
+      assert.strictEqual(errorSpy.args[0][0].message, 'Could not subscribe all 1 topic(s) but got error qos=128 on following 1 topic(s): foo')
+
+      vrpcRemote.off('error', errorSpy)
+    })
+    it('should correctly report error on subscribe where qos=0 is returned', () => {
+      const errorSpy = sinon.spy()
+      vrpcRemote.on('error', errorSpy)
+
+      // and now mock a subscription with reduced qos
+      vrpcRemote._mqttSubscribe('foo', { outputQos: 0 })
+      assert.strictEqual(errorSpy.args[0][0].code, 'SUBSCRIBE_REDUCED_QOS')
+      assert.strictEqual(errorSpy.args[0][0].message, 'Could not subscribe all 1 topic(s) at desired qos=1 but got reduced qos on following 1 topic(s): [{"topic":"foo","qos":0}]')
+
+      vrpcRemote.off('error', errorSpy)
+    })
+    it('should correctly not report error on subscribe with qos=0 if bestEffort=true', () => {
+      const bestEffortClient = new VrpcRemote({
+        domain: 'test.vrpc',
+        agent: 'js',
+        token: 'notreallyneeded',
+        bestEffort: true // now with "true" here
+      })
+      // Install a mock mqtt client object
+      bestEffortClient._client = {
+        subscribe: mockSubscribeFunction
+      }
+      const errorSpy = sinon.spy()
+      bestEffortClient.on('error', errorSpy)
+
+      // and now mock a subscription with qos=0 but this is also intended
+      bestEffortClient._mqttSubscribe('foo', { outputQos: 0 })
+      assert(errorSpy.notCalled) // all fine
+    })
+  })
 })
