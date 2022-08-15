@@ -41,6 +41,16 @@ const os = require('os')
 const crypto = require('crypto')
 const mqtt = require('mqtt')
 const EventEmitter = require('events')
+const coreDebug = require('debug')('VrpcRemote:core')
+const configDebug = require('debug')('VrpcRemote:config')
+const mqttDebug = require('debug')('VrpcRemote:mqtt')
+const coreProtocol = require('debug')('VrpcRemote:protocol')
+const coreProtocolVerbose = require('debug')('VrpcRemote:protocol:verbose')
+const coreProtocolMegaVerbose = require('debug')('VrpcRemote:protocol:megaVerbose')
+const coreRPC = require('debug')('VrpcRemote:protocol:RPC')
+const coreCallStatic = require('debug')('VrpcRemote:callStatic')
+const coreAgentAnswerHandler = require('debug')('VrpcRemote:coreAgentAnswerHandler')
+const byteSize = require('byte-size')
 
 /**
  * Client capable of creating proxy objects and remotely calling
@@ -121,6 +131,8 @@ class VrpcRemote extends EventEmitter {
     } else {
       this._log = log
     }
+
+    configDebug(this._username, this._agent, this._domain, this._broker, this._timeout, this._qos)
   }
 
   /**
@@ -161,17 +173,21 @@ class VrpcRemote extends EventEmitter {
 
     this._client.on('error', err => {
       this.emit('error', err)
+      mqttDebug('error listener', err.message)
     })
 
     this._client.stream.on('error', err => {
       this.emit('error', err)
+      mqttDebug('stream error listener', err.message)
     })
 
     this.on('error', err => {
       this._log.debug(`Encountered MQTT error: ${err.message}`)
+      coreDebug('Error listener', err)
     })
 
     this._client.on('connect', () => {
+      mqttDebug('connect event listener starts')
       // This will give us an overview of all remotely available classes
       const agent = this._agent === '*' ? '+' : this._agent
       // Agent info
@@ -181,19 +197,25 @@ class VrpcRemote extends EventEmitter {
       // RPC responses
       this._mqttSubscribe(this._vrpcClientId)
       this.emit('connect')
+      mqttDebug('connect listener function completed execution')
     })
 
     this._client.on('message', (topic, message) => {
+      mqttDebug('message listener start')
+      const { value: sizeValue, long: sizeName } = byteSize(message.length)
+      mqttDebug(`message size ${sizeValue} ${sizeName}`)
       if (message.length === 0) return
       const tokens = topic.split('/')
       const [domain, agent, klass, instance] = tokens
       if (domain !== this._domain) {
+        mqttDebug(`Received message from foreign domain: ${domain}`)
         this._log.warn(`Received message from foreign domain: ${domain}`)
         return
       }
       // AgentInfo message
       if (klass === '__agentInfo__') {
         const { status, hostname, version } = JSON.parse(message.toString())
+        coreProtocol(`PROTOCOL message __agentInfo__ | status: ${status} hostname: ${hostname} version: ${version}`)
         this._createIfNotExist(agent)
         this._agents[agent].status = status
         this._agents[agent].hostname = hostname
@@ -217,10 +239,22 @@ class VrpcRemote extends EventEmitter {
           staticFunctions,
           meta
         } = json
-        if (removed.length !== 0)
+        coreProtocol(`PROTOCOL message __classInfo__`)
+        coreProtocolVerbose(`className: ${className}`)
+        coreProtocolVerbose('instances', instances)
+        coreProtocolVerbose('memberFunctions (instance methods)', memberFunctions)
+        coreProtocolVerbose('staticFunctions (static methods)', staticFunctions)
+
+        if (removed.length !== 0) {
           this.emit('instanceGone', removed, { domain, agent, className })
-        if (added.length !== 0)
+          coreProtocol(`PROTOCOL instanceGone emitted ${removed}`)
+        }
+        if (added.length !== 0) {
           this.emit('instanceNew', added, { domain, agent, className })
+          coreProtocol(`PROTOCOL instanceNew emitted ${added}`)
+          coreProtocolVerbose('domain, agent, className', domain, agent, className)
+        }
+          
         this.emit('class', {
           domain,
           agent,
@@ -232,15 +266,23 @@ class VrpcRemote extends EventEmitter {
         })
         // RPC message
       } else {
+        coreRPC('START')
         const { id, data } = JSON.parse(message.toString())
+        coreRPC(`id: ${id}`)
         this._eventEmitter.emit(id, data)
+        coreRPC(`event emitted with id: ${id} (use VrpcRemote:protocol:megaVerbose namespace for data)`)
+        coreProtocolMegaVerbose(JSON.stringify(data, null, 2))
       }
+      mqttDebug('message listener end')
     })
     await new Promise((resolve, reject) => {
+      mqttDebug('Timeout Promise started')
       const timer = setTimeout(() => {
+        mqttDebug('Timeout Promise REJECTED!')
         reject(new Error(`Connection trial timed out (> ${this._timeout} ms)`))
       }, this._timeout)
       this.once('connect', () => {
+        mqttDebug('Timeout Promise RESOLVED')
         clearTimeout(timer)
         resolve()
       })
@@ -423,6 +465,7 @@ class VrpcRemote extends EventEmitter {
     args = [],
     agent = this._agent
   } = {}) {
+    coreCallStatic('START')
     const wrapped = this._wrapArguments(className, functionName, ...args)
     if (!wrapped) return // Skipping remote call -> handled locally
     const json = {
@@ -432,9 +475,15 @@ class VrpcRemote extends EventEmitter {
       sender: this._vrpcClientId,
       data: VrpcRemote._argsArrayToObject(wrapped)
     }
+    coreCallStatic(`published data:`)
+    coreCallStatic(`context/className: ${className}`)
+    coreCallStatic(`method/functionName: ${functionName}`)
+    coreCallStatic(`id: ${json.id}`)
     const topic = `${this._domain}/${agent}/${className}/__static__/${functionName}`
+    coreCallStatic(`Target topic: ${topic}`)
     await this._waitUntilClassIsOnline(agent, className)
     this._mqttPublish(topic, JSON.stringify(json))
+    coreCallStatic('END')
     return this._handleAgentAnswer(json)
   }
 
@@ -870,14 +919,17 @@ class VrpcRemote extends EventEmitter {
   }
 
   _mqttSubscribe (topic, options) {
+    mqttDebug('will subscribe to topic:', topic, 'with options:', options)
     this._client.subscribe(
       topic,
       { qos: this._qos, ...options },
       (err, granted) => {
+        mqttDebug('subscription granted:', granted)
         if (err) {
           this._log.warn(
             `Could not subscribe to topic(s): '${topic}', because: ${err.message}`
           )
+          mqttDebug('subscription error:', err.message)
         } else {
           const topicArray = Array.isArray(topic) ? topic : [topic]
           const erroneousGranted = granted.filter(x => x.qos === 128).map(x => x.topic)
@@ -890,6 +942,7 @@ class VrpcRemote extends EventEmitter {
           }
           const reducedQos = granted.filter(x => x.qos < this._qos)
           if (reducedQos.length > 0) {
+            mqttDebug('WARNING REDUCED QoS:', JSON.stringify(reducedQos))
             err = new Error(`Could not subscribe all ${topicArray.length} topic(s) at desired qos=${this._qos} but got reduced qos on following ${reducedQos.length} topic(s): ${JSON.stringify(reducedQos)}`)
             err.code = 'SUBSCRIBE_REDUCED_QOS'
             err.subscribeOptions = options
@@ -898,6 +951,7 @@ class VrpcRemote extends EventEmitter {
           }
           if (granted.length === 0) {
             this._log.debug(`Already subscribed to: ${topic}`)
+            mqttDebug('Was already subscribed to topic:', topic)
           }
         }
       }
@@ -1018,16 +1072,21 @@ class VrpcRemote extends EventEmitter {
 
   async _handleAgentAnswer ({ id, context, method }) {
     return new Promise((resolve, reject) => {
+      coreAgentAnswerHandler(`Promise scheduled`)
       const msg = `Function call "${context}::${method}()" timed out (> ${this._timeout} ms)`
       const timer = setTimeout(() => {
         this._eventEmitter.removeAllListeners(id)
+        coreAgentAnswerHandler(`Timeout expired for id ${id} after timeout of ${this._timeout}`)
         reject(new Error(msg))
       }, this._timeout)
       this._eventEmitter.once(id, data => {
+        coreAgentAnswerHandler(`Got data`)
         clearTimeout(timer)
         if (data.e) {
+          coreAgentAnswerHandler(`but it was an error......`)
           reject(new Error(data.e))
         } else {
+          coreAgentAnswerHandler(`checking if promise or something else`)
           const ret = data.r
           // Handle functions returning a promise
           if (typeof ret === 'string' && ret.substr(0, 5) === '__p__') {
@@ -1064,6 +1123,7 @@ class VrpcRemote extends EventEmitter {
   }
 
   _wrapArguments (remoteId, functionName, ...args) {
+    coreDebug('_wrapArguments start')
     const wrapped = []
     let isHandledLocally = false
     args.forEach((x, i) => {
@@ -1075,6 +1135,7 @@ class VrpcRemote extends EventEmitter {
         // 2) callback is second argument
         // 3) first argument was string
         if (functionName === 'on' && i === 1 && typeof args[0] === 'string') {
+          coreDebug('_wrapArguments add event subscription')
           const id = this._addEventSubscription(remoteId, args[0], x)
           if (!id) isHandledLocally = true
           wrapped.push(id)
@@ -1083,6 +1144,7 @@ class VrpcRemote extends EventEmitter {
           i === 1 &&
           typeof args[0] === 'string'
         ) {
+          coreDebug('_wrapArguments remove event subscription')
           const id = this._removeEventSubscription(remoteId, args[0], x)
           if (!id) isHandledLocally = true
           wrapped.push(id)
@@ -1091,6 +1153,7 @@ class VrpcRemote extends EventEmitter {
           const id = `__f__${remoteId}-${functionName}-${i}-${this._invokeId++ %
             Number.MAX_SAFE_INTEGER}`
           wrapped.push(id)
+          coreDebug(`_wrapArguments generated id is: ${id}`)
           this._eventEmitter.once(id, data => {
             const args = Object.keys(data)
               .sort()
@@ -1103,6 +1166,7 @@ class VrpcRemote extends EventEmitter {
         const { emitter, event } = x
         const id = `__f__${remoteId}-${functionName}-${i}-${event}`
         wrapped.push(id)
+        coreDebug(`_wrapArguments event emitter detected id is: ${id}`)
         this._eventEmitter.on(id, data => {
           const args = Object.keys(data)
             .sort()
@@ -1114,13 +1178,18 @@ class VrpcRemote extends EventEmitter {
         wrapped.push(x)
       }
     })
+    coreDebug('_wrapArguments isHandledLocally:', isHandledLocally)
+    coreDebug('_wrapArguments end')
     if (isHandledLocally) return null
     return wrapped
   }
 
   _addEventSubscription (remoteId, event, callback) {
+    coreDebug('_addEventSubscription start')
     const id = `__f__${remoteId}-${event}`
+    coreDebug(`_addEventSubscription generated id: ${id}`)
     if (this._cachedSubscriptions.has(id)) {
+      coreDebug(`_addEventSubscription found cached subscription for id: ${id}`)
       this._cachedSubscriptions.get(id).on(id, callback)
       return
     }
@@ -1128,11 +1197,14 @@ class VrpcRemote extends EventEmitter {
     emitter.on(id, callback)
     this._cachedSubscriptions.set(id, emitter)
     this._eventEmitter.on(id, data => {
+      coreDebug(`_addEventSubscription event listener for emitter with id: ${id} called (use VrpcRemote:protocol:megaVerbose namespace for data)`)
+      coreProtocolMegaVerbose(data)
       const args = Object.keys(data)
         .sort()
         .filter(x => x[0] === '_')
         .map(x => data[x])
       emitter.emit(id, ...args)
+      coreDebug('_addEventSubscription end')
     })
     return id
   }
