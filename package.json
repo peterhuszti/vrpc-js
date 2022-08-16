@@ -74,6 +74,7 @@
     "caller": "^1.0.1",
     "debug": "^4.3.4",
     "mqtt": "^4.2.6",
-    "nanoid": "^3.1.23"
+    "nanoid": "^3.1.23",
+    "supports-color": "^9.2.2"
   }
 }
