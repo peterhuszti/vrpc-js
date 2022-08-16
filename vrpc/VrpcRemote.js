@@ -50,6 +50,7 @@ const coreProtocolMegaVerbose = require('debug')('VrpcRemote:protocol:megaVerbos
 const coreRPC = require('debug')('VrpcRemote:protocol:RPC')
 const coreCallStatic = require('debug')('VrpcRemote:callStatic')
 const coreAgentAnswerHandler = require('debug')('VrpcRemote:coreAgentAnswerHandler')
+const coreGetInstance = require('debug')('VrpcRemote:getInstance')
 const byteSize = require('byte-size')
 
 /**
@@ -382,13 +383,17 @@ class VrpcRemote extends EventEmitter {
    * @returns {Promise<Proxy>} Proxy object reflecting the remotely existing instance
    */
   async getInstance (instance, options) {
+    coreGetInstance('START')
     if (this._proxies[instance]) return this._proxies[instance]
+    coreGetInstance('instance not found on cache')
     if (typeof instance === 'string') {
+      coreGetInstance('calling _getInstanceData')
       const {
         agent,
         className,
         instance: instanceString
       } = await this._getInstanceData(instance, options)
+      coreGetInstance('returned from _getInstanceData about to return _createProxi')
       return this._createProxy(agent, className, instanceString)
     } else {
       // deprecate this
@@ -1104,18 +1109,25 @@ class VrpcRemote extends EventEmitter {
 
   async _waitForInstance (instance, options = {}) {
     return new Promise((resolve, reject) => {
+      coreGetInstance('_waitForInstance promise start')
       const handler = timer => (instances, { agent, className }) => {
+        coreGetInstance('_waitForInstance handler executing')
+        coreGetInstance(agent)
+        coreGetInstance(className)
+        coreGetInstance(instances)
         if (instances.includes(instance)) {
           if (options.agent && agent !== options.agent) return
           if (options.className && className !== options.className) return
           clearTimeout(timer)
           this.removeListener('instanceNew', handler)
+          coreGetInstance('resolving with instances')
           resolve({ agent, className, instance })
         }
       }
       const timer = setTimeout(() => {
         this.removeListener('instanceNew', handler(timer))
         const msg = `Could not find instance: ${instance} (> ${this._timeout} ms)`
+        coreGetInstance('Failed to find instance timeout executing promise rejection')
         reject(new Error(msg))
       }, this._timeout)
       this.on('instanceNew', handler(timer))
@@ -1248,11 +1260,14 @@ class VrpcRemote extends EventEmitter {
   }
 
   async _getInstanceData (instance, options = {}) {
+    coreGetInstance('trying to fetch instance from cache')
     const instanceData = this._getInstanceFromCache(instance, options)
     if (!instanceData) {
       if (options.noWait) {
+        coreGetInstance('options.noWait is set throwing error')
         throw new Error(`Could not find instance: ${instance}`)
       }
+      coreGetInstance('going to _waitForInstance')
       return this._waitForInstance(instance, options)
     }
     return instanceData
