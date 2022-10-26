@@ -190,7 +190,6 @@ class VrpcAgent extends EventEmitter {
     }
     this._options = {
       username,
-      password,
       keepalive: 30,
       connectTimeout: 10 * 1000,
       clientId: mqttClientId || `vrpca${md5}`,
