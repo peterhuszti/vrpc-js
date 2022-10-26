@@ -211,7 +211,7 @@ class VrpcAgent extends EventEmitter {
     this._log.info('Connecting to MQTT server...')
     this._client = mqtt.connect(this._broker, this._options)
     this._client.on('connect', this._handleConnect.bind(this))
-    this._client.on('reconnect', this._handleReconnect.bind(this))
+    this._client.on('reconnect', (foo) => this._handleReconnect(foo, this))
     this._client.on('error', this._handleError.bind(this))
     this._client.on('message', this._handleMessage.bind(this))
     this._client.on('close', this._handleClose.bind(this))
@@ -666,7 +666,9 @@ class VrpcAgent extends EventEmitter {
     this._log.debug(`Unsubscribed from topic after deletion: ${topic}`)
   }
 
-  _handleReconnect() {
+  _handleReconnect(foo, that) {
+    console.log('foo: ', foo)
+    console.log('that: ', that)
     this._log.warn(`Reconnecting to ${this._broker}`)
     this.emit('reconnect')
   }
